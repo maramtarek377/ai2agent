@@ -82,6 +82,7 @@ class Recommendations(BaseModel):
     nutrition_targets: Optional[dict] = None
     doctor_recommendations: Optional[List[str]] = None
     medication_recommendations: Optional[List[dict]] = None
+    required_labs: Optional[List[dict]] = None
 
 class State(TypedDict):
     patient_data: dict
@@ -205,6 +206,8 @@ def build_patient_profile(input_values: dict) -> str:
         bp = input_values['Blood_Pressure']
         bp_status = " (Normal)" if bp <= 120 else " (Elevated)" if bp <= 129 else " (Hypertension)"
         profile.append(f"Blood Pressure: {bp}{bp_status}")
+    elif 'hypertension' in input_values:
+        profile.append("Blood Pressure: " + ("Hypertension" if input_values['hypertension'] else "Normal"))
     
     if input_values.get('glucose'):
         glucose = input_values['glucose']
@@ -418,16 +421,21 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
     
     # Cardiology-specific medication needs
     if specialty.lower() == "cardiology":
-        if input_values.get('hypertension'):
+        hypertension_status = input_values.get('hypertension', False)
+        blood_pressure = input_values.get('Blood_Pressure', 120)  # Default to normal if not provided
+        
+        if hypertension_status or blood_pressure > 130:
             medication_needs.append({
                 "condition": "Hypertension",
-                "priority": "High" if input_values['Blood_Pressure'] > 140 else "Moderate"
+                "priority": "High" if blood_pressure > 140 else "Moderate"
             })
+            
         if parse_probability(risk_probs['Heart Disease']) > 0.2:
             medication_needs.append({
                 "condition": "Cardiovascular Disease Prevention",
                 "priority": "High" if parse_probability(risk_probs['Heart Disease']) > 0.3 else "Moderate"
             })
+            
         if input_values.get('ld_value', 0) > 130:
             medication_needs.append({
                 "condition": "Hyperlipidemia",
@@ -441,11 +449,13 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
                 "condition": "Diabetes Prevention",
                 "priority": "High" if parse_probability(risk_probs['Diabetes']) > 0.5 else "Moderate"
             })
+            
         if input_values.get('BMI', 0) > 30:
             medication_needs.append({
                 "condition": "Obesity Management",
                 "priority": "High" if input_values['BMI'] > 35 else "Moderate"
             })
+            
         if input_values.get('hemoglobin_a1c', 0) > 6.5:
             medication_needs.append({
                 "condition": "Diabetes Treatment",
@@ -456,13 +466,17 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
     lab_recommendations = []
     
     if specialty.lower() == "cardiology":
-        if input_values.get('hypertension'):
+        hypertension_status = input_values.get('hypertension', False)
+        blood_pressure = input_values.get('Blood_Pressure', 120)
+        
+        if hypertension_status or blood_pressure > 130:
             lab_recommendations.append({
                 "test": "Basic metabolic panel",
                 "frequency": "Annually",
                 "rationale": "Monitor electrolytes and kidney function in hypertensive patients"
             })
-            if input_values.get('Blood_Pressure', 0) > 140:
+            
+            if blood_pressure > 140:
                 lab_recommendations.append({
                     "test": "Urinalysis",
                     "frequency": "Now and annually",
@@ -476,7 +490,7 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
                 "rationale": "Monitor LDL in high CVD risk patient"
             })
             
-            if input_values.get('is_smoking'):
+            if input_values.get('is_smoking', False):
                 lab_recommendations.append({
                     "test": "High-sensitivity CRP",
                     "frequency": "Annually",
@@ -732,24 +746,25 @@ async def get_recommendations(patient_id: str, sent_for: Optional[int] = 0):
     # Get available medicines from database
     available_medicines = get_available_medicines()
 
+    # Build patient data with defaults for required fields
     patient_data = {
-        "Blood_Pressure": patient.get('bloodPressure'),
-        "Age": patient.get('anchorAge'),
-        "Exercise_Hours_Per_Week": patient.get('exerciseHoursPerWeek'),
-        "Diet":  patient.get('diet'),
-        "Sleep_Hours_Per_Day": patient.get('sleepHoursPerDay'),
-        "Stress_Level": patient.get('stressLevel'),
-        "glucose": patient.get('glucose'),
-        "BMI": patient.get('bmi'),
-        "hypertension":  1 if patient.get("bloodPressure", 0) > 130 else 0,
-        "is_smoking": patient.get('isSmoker'),
-        "hemoglobin_a1c": patient.get('hemoglobinA1c'),
-        "Diabetes_pedigree": patient.get('diabetesPedigree'),
-        "CVD_Family_History": patient.get('ckdFamilyHistory'),
-        "ld_value": patient.get('cholesterolLDL'),
-        "admission_tsh": patient.get('admissionSOH'),
-        "is_alcohol_user": patient.get('isAlcoholUser'),
-        "creatine_kinase_ck": patient.get('creatineKinaseCK'),
+        "Blood_Pressure": patient.get('bloodPressure', 120),  # Default to normal if not provided
+        "Age": patient.get('anchorAge', 30),  # Default age if not provided
+        "Exercise_Hours_Per_Week": patient.get('exerciseHoursPerWeek', 0),
+        "Diet": patient.get('diet', 'average'),
+        "Sleep_Hours_Per_Day": patient.get('sleepHoursPerDay', 7),
+        "Stress_Level": patient.get('stressLevel', 5),
+        "glucose": patient.get('glucose', 90),
+        "BMI": patient.get('bmi', 22),
+        "hypertension": patient.get('bloodPressure', 120) > 130,  # Determine from BP if not provided
+        "is_smoking": patient.get('isSmoker', False),
+        "hemoglobin_a1c": patient.get('hemoglobinA1c', 5.5),
+        "Diabetes_pedigree": patient.get('diabetesPedigree', 0.5),
+        "CVD_Family_History": patient.get('ckdFamilyHistory', False),
+        "ld_value": patient.get('cholesterolLDL', 100),
+        "admission_tsh": patient.get('admissionSOH', 2.5),
+        "is_alcohol_user": patient.get('isAlcoholUser', False),
+        "creatine_kinase_ck": patient.get('creatineKinaseCK', 100),
         "gender": 'M' if patient['gender'].lower().startswith('m') else 'F',
     }
 
