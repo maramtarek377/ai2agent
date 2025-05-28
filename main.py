@@ -2,7 +2,7 @@ import os
 import json
 import re
 import logging
-from datetime import date, timedelta
+from datetime import date
 from typing import TypedDict, Optional, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -75,21 +75,20 @@ class Medicine(BaseModel):
     contraindications: Optional[List[str]] = None
     interactions: Optional[List[str]] = None
 
-class SuggestedMedication(BaseModel):
+class MedicationRecommendation(BaseModel):
     name: str
     dosage: str
-    duration: str
-    rationale: str
-    priority: str
-    time_to_take: str
-    wait_time: Optional[str] = None
-
-class LabTest(BaseModel):
-    name: str
-    reason: str
     frequency: str
-    next_due: str
-    preparation: Optional[str] = None
+    reason: str
+
+class LabRecommendation(BaseModel):
+    test_name: str
+    frequency: str
+    reason: str
+
+class QuestionRecommendation(BaseModel):
+    question: str
+    reason: str
 
 class Recommendations(BaseModel):
     patient_recommendations: Optional[List[str]] = None
@@ -97,8 +96,9 @@ class Recommendations(BaseModel):
     exercise_plan: Optional[dict] = None
     nutrition_targets: Optional[dict] = None
     doctor_recommendations: Optional[List[str]] = None
-    suggested_medications: Optional[List[SuggestedMedication]] = None
-    required_labs: Optional[List[LabTest]] = None
+    medication_recommendations: Optional[List[MedicationRecommendation]] = None
+    lab_recommendations: Optional[List[LabRecommendation]] = None
+    question_recommendations: Optional[List[QuestionRecommendation]] = None
 
 class State(TypedDict):
     patient_data: dict
@@ -420,147 +420,145 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
     """Generate dynamic prompt for specialist recommendations with detailed medication analysis"""
     patient_profile = build_patient_profile(input_values)
     
-    # Filter medicines by specialty
-    specialty_meds = [m for m in available_meds if specialty.lower() in m.specialization.lower()]
+    # Filter medicines by specialty and patient conditions
+    specialty_meds = []
+    for m in available_meds:
+        if specialty.lower() in m.specialization.lower():
+            # Additional filtering based on patient conditions
+            if specialty.lower() == "cardiology":
+                if input_values.get('hypertension') or parse_probability(risk_probs['Heart Disease']) > 0.2:
+                    specialty_meds.append(m)
+            elif specialty.lower() == "endocrinology":
+                if parse_probability(risk_probs['Diabetes']) > 0.2 or input_values.get('BMI', 0) > 25:
+                    specialty_meds.append(m)
     
-    # Analyze current medications for potential issues
-    current_meds_str = ""
-    if medications:
-        current_meds_str = "Current Medications:\n"
-        for med in medications:
-            current_meds_str += f"- {med.medicationName} ({med.dosage}, {med.frequency})\n"
-    
-    # Generate dynamic questions based on patient inputs
-    questions_to_ask = []
-    
-    # Cardiology-specific questions
+    # Build condition-specific medication recommendations
+    condition_based_recommendations = []
     if specialty.lower() == "cardiology":
         if input_values.get('hypertension'):
-            questions_to_ask.append("Duration and severity of hypertension symptoms")
-            questions_to_ask.append("Any episodes of chest pain or palpitations")
-        if input_values.get('is_smoking'):
-            questions_to_ask.append("Smoking history (pack-years)")
-        if input_values.get('CVD_Family_History'):
-            questions_to_ask.append("Details of family history of cardiovascular disease")
-        if input_values.get('Blood_Pressure', 0) > 140:
-            questions_to_ask.append("Any symptoms of hypertensive urgency (headache, visual changes)")
-        if input_values.get('ld_value', 0) > 130:
-            questions_to_ask.append("Previous attempts at cholesterol management")
-    
-    # Endocrinology-specific questions
+            condition_based_recommendations.append({
+                "condition": "Hypertension",
+                "meds": [m for m in specialty_meds if "hypertension" in m.specialization.lower()]
+            })
+        if parse_probability(risk_probs['Heart Disease']) > 0.2:
+            condition_based_recommendations.append({
+                "condition": "High CVD Risk",
+                "meds": [m for m in specialty_meds if "cholesterol" in m.specialization.lower() or "antiplatelet" in m.specialization.lower()]
+            })
     elif specialty.lower() == "endocrinology":
         if parse_probability(risk_probs['Diabetes']) > 0.3:
-            questions_to_ask.append("Symptoms of hyperglycemia (polyuria, polydipsia)")
-            questions_to_ask.append("History of hypoglycemic episodes")
+            condition_based_recommendations.append({
+                "condition": "Diabetes",
+                "meds": [m for m in specialty_meds if "diabetes" in m.specialization.lower()]
+            })
         if input_values.get('BMI', 0) > 30:
-            questions_to_ask.append("Weight history and previous weight loss attempts")
-        if input_values.get('hemoglobin_a1c', 0) > 5.7:
-            questions_to_ask.append("Dietary habits and carbohydrate intake patterns")
-        if input_values.get('admission_tsh'):
-            questions_to_ask.append("Symptoms of thyroid dysfunction (fatigue, weight changes)")
+            condition_based_recommendations.append({
+                "condition": "Obesity",
+                "meds": [m for m in specialty_meds if "obesity" in m.specialization.lower()]
+            })
     
-    # General questions based on inputs
-    if input_values.get('Stress_Level', 0) > 6:
-        questions_to_ask.append("Stress management techniques currently used")
-    if input_values.get('Exercise_Hours_Per_Week', 0) < 2:
-        questions_to_ask.append("Barriers to physical activity")
-    if input_values.get('Sleep_Hours_Per_Day', 0) < 6:
-        questions_to_ask.append("Sleep quality and any sleep disturbances")
+    # Build lab recommendations based on patient status
+    lab_recommendations = []
     
-    # Calculate next due dates for lab tests
-    today = date.today()
-    next_month = today + timedelta(days=30)
-    next_3_months = today + timedelta(days=90)
-    next_6_months = today + timedelta(days=180)
-    next_year = today + timedelta(days=365)
+    if specialty.lower() == "cardiology":
+        if input_values.get('hypertension'):
+            lab_recommendations.append({
+                "test": "Basic metabolic panel",
+                "frequency": "Annually",
+                "rationale": "Monitor electrolytes and kidney function in hypertensive patients"
+            })
+        if parse_probability(risk_probs['Heart Disease']) > 0.2:
+            lab_recommendations.append({
+                "test": "Lipid panel",
+                "frequency": "Every 6 months",
+                "rationale": "Monitor LDL in high CVD risk patient"
+            })
+    
+    elif specialty.lower() == "endocrinology":
+        if parse_probability(risk_probs['Diabetes']) > 0.3:
+            lab_recommendations.append({
+                "test": "Hemoglobin A1c",
+                "frequency": "Every 3 months",
+                "rationale": "Monitor glycemic control in high diabetes risk"
+            })
+    
+    # Build questions based on patient inputs
+    questions_to_ask = []
+    
+    if specialty.lower() == "cardiology":
+        if input_values.get('hypertension'):
+            questions_to_ask.append({
+                "question": "Do you experience any chest pain or palpitations?",
+                "rationale": "Assess for cardiac symptoms in hypertensive patient"
+            })
+        if input_values.get('is_smoking'):
+            questions_to_ask.append({
+                "question": "How many cigarettes do you smoke per day?",
+                "rationale": "Quantify smoking habit for risk assessment"
+            })
+    
+    elif specialty.lower() == "endocrinology":
+        if parse_probability(risk_probs['Diabetes']) > 0.3:
+            questions_to_ask.append({
+                "question": "Do you experience increased thirst or frequent urination?",
+                "rationale": "Assess for diabetes symptoms"
+            })
+        if input_values.get('BMI', 0) > 30:
+            questions_to_ask.append({
+                "question": "What weight loss methods have you tried in the past?",
+                "rationale": "Understand weight history for obesity management"
+            })
     
     prompt_parts = [
-        f"Generate comprehensive {specialty} recommendations for this patient:",
+        f"Generate {specialty} recommendations for this patient:",
         patient_profile,
         "",
         "Health Risks:",
         f"- Diabetes: {risk_probs['Diabetes']}",
         f"- Heart Disease: {risk_probs['Heart Disease']}",
         "",
-        current_meds_str,
+        "Current Conditions:",
+        *[f"- {c['condition']}" for c in condition_based_recommendations],
         "",
-        f"Available {specialty} Medications:",
-        "\n".join([f"- {m.name} ({m.active_ingredient})" for m in specialty_meds]) if specialty_meds else "None",
-        "",
-        "Provide recommendations in this exact JSON format:",
+        "Return recommendations in this exact JSON format:",
         "{",
-        '    "doctor_recommendations": [',
-        '        "Key clinical findings and prioritized risk factors",',
-        '        "Medication adjustments: [list specific changes with dosages, timing, and duration]",',
-        '        "New medication suggestions: [include name, dosage, frequency, duration, and rationale]",',
-        '        "Lab tests: [list with frequency and clinical rationale]",',
-        '        "Monitoring plan: [specific parameters and follow-up schedule]",',
-        '        "Critical questions to ask patient: [based on their profile]",',
-        '        "Red flags requiring immediate attention",',
-        '        "Medication interaction warnings and management"',
-        '    ],',
-        '    "suggested_medications": [',
+        '    "medication_recommendations": [',
         '        {',
         '            "name": "Medication name from available list",',
-        '            "dosage": "Recommended dosage per day",',
-        '            "duration": "Recommended duration of treatment (e.g., 3 months)",',
-        '            "rationale": "Why this medication is recommended for this patient",',
-        '            "priority": "High/Medium/Low based on patient condition",',
-        '            "time_to_take": "Best time of day to take (morning/evening/with food)",',
-        '            "wait_time": "Hours to wait before/after other medications if needed"',
+        '            "dosage": "Specific dosage with units (e.g., 50mg)",',
+        '            "frequency": "How often to take (e.g., twice daily)",',
+        '            "reason": "Brief rationale for this medication"',
         '        }',
         '    ],',
-        '    "required_labs": [',
+        '    "lab_recommendations": [',
         '        {',
-        '            "name": "Lab test name",',
-        '            "reason": "Why this test is needed for this patient",',
-        '            "frequency": "How often to repeat (e.g., every 3 months)",',
-        '            "next_due": "When next test should be (YYYY-MM-DD)",',
-        '            "preparation": "Any special preparation needed (fasting, etc.)"',
+        '            "test_name": "Lab test name",',
+        '            "frequency": "How often to perform",',
+        '            "reason": "Clinical rationale"',
         '        }',
         '    ],',
-        '    "patient_questions": [',
-        '        "list of specific questions to ask this patient based on their profile"',
+        '    "question_recommendations": [',
+        '        {',
+        '            "question": "Specific question to ask",',
+        '            "reason": "Why this question is important"',
+        '        }',
         '    ]',
         "}",
         "",
-        "Recommendations should:",
-        f"- Be specific to {specialty} practice",
-        "- Prioritize medications from the available list",
-        "- Specify exact dosages (mg) and frequencies (per day/week)",
-        "- Include duration for any new medications (e.g., 'for 3 months')",
-        "- Highlight critical medication interactions and how to manage them",
-        "- Recommend labs based on patient's specific risk factors and current status",
-        f"- Ask relevant questions based on: {', '.join([f'{k}={v}' for k,v in input_values.items()])}",
-        "- Provide clear follow-up timeline",
-        "",
-        "Suggested Medications Requirements:",
-        "- For each recommended medication, include:",
-        "  - Exact name matching available medications list",
-        "  - Specific dosage (e.g., '50 mg twice daily')",
-        "  - Treatment duration (e.g., '3 months then reassess')",
-        "  - Clear rationale linking to patient's conditions",
-        "  - Priority level based on clinical urgency",
-        "  - Best time to take (considering other meds and condition)",
-        "  - Any required wait times between medications",
-        "",
-        "Lab Test Requirements:",
-        "- For each recommended lab test:",
-        "  - Use standard test names",
-        "  - Explain why needed for THIS patient",
-        "  - Specify frequency based on guidelines",
-        f"  - Calculate next due date (today is {today.strftime('%Y-%m-%d')})",
-        "  - Note any special preparation",
-        "",
-        "Patient Questions:",
-        "Generate specific questions to ask THIS patient based on their:",
-        "- Current symptoms",
-        "- Risk factors",
-        "- Medication regimen",
-        "- Lifestyle factors",
-        f"Example questions for this patient: {questions_to_ask}",
-        "",
-        "Return ONLY the JSON object with no additional text or explanations."
+        "Requirements:",
+        f"- Only recommend medications from this list: {[m.name for m in specialty_meds]}",
+        "- Base medication recommendations on:",
+        *[f"  - {c['condition']}: Consider {[m.name for m in c['meds']]}" for c in condition_based_recommendations],
+        "- For each medication:",
+        "  - Specify exact dosage and frequency",
+        "  - Provide brief clinical rationale",
+        "- For labs:",
+        "  - Only recommend if clinically indicated",
+        "  - Specify frequency and reason",
+        "- For questions:",
+        "  - Make them specific to patient's conditions",
+        "  - Explain why each question is important",
+        "- Return ONLY the JSON object with no additional text."
     ]
     
     return "\n".join(prompt_parts)
@@ -592,25 +590,29 @@ def generate_recommendations(state: State) -> dict:
         json_str = re.search(r'\{.*\}', resp.content, re.DOTALL).group(0)
         data = json.loads(json_str)
         
-        # Process doctor recommendations if present
-        if 'doctor_recommendations' in data and data['doctor_recommendations']:
-            processed_recs = []
-            for rec in data['doctor_recommendations']:
-                if isinstance(rec, dict):
-                    key = next(iter(rec))
-                    processed_recs.append(f"{key}: {rec[key]}")
-                else:
-                    processed_recs.append(rec)
-            data['doctor_recommendations'] = processed_recs
+        # Process recommendations into structured format
+        processed_data = {}
+        if sent_for == 0:
+            processed_data = {
+                "patient_recommendations": data.get("patient_recommendations", []),
+                "diet_plan": data.get("diet_plan", {}),
+                "exercise_plan": data.get("exercise_plan", {}),
+                "nutrition_targets": data.get("nutrition_targets", {})
+            }
+        else:
+            processed_data = {
+                "medication_recommendations": [
+                    MedicationRecommendation(**med) for med in data.get("medication_recommendations", [])
+                ],
+                "lab_recommendations": [
+                    LabRecommendation(**lab) for lab in data.get("lab_recommendations", [])
+                ],
+                "question_recommendations": [
+                    QuestionRecommendation(**q) for q in data.get("question_recommendations", [])
+                ]
+            }
         
-        # Convert suggested medications and labs to proper models
-        if 'suggested_medications' in data:
-            data['suggested_medications'] = [SuggestedMedication(**med) for med in data['suggested_medications']]
-        
-        if 'required_labs' in data:
-            data['required_labs'] = [LabTest(**lab) for lab in data['required_labs']]
-            
-        return {'recommendations': Recommendations(**data)}
+        return {'recommendations': Recommendations(**processed_data)}
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse LLM response: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to parse recommendation response")
@@ -653,13 +655,30 @@ def output_results(state: State) -> dict:
             'nutrition_targets': state['recommendations'].nutrition_targets
         })
     else:
-        # Include all doctor-specific outputs
+        # Include all specialist recommendations in structured format
         rec_data = state['recommendations'].dict()
         result.update({
-            'doctor_recommendations': rec_data.get('doctor_recommendations', [])[:6],
-            'suggested_medications': rec_data.get('suggested_medications', [])[:3],
-            'required_labs': rec_data.get('required_labs', [])[:3],
-            'patient_questions': rec_data.get('patient_questions', [])[:3]
+            'medication_recommendations': [
+                {
+                    'name': m.name,
+                    'dosage': m.dosage,
+                    'frequency': m.frequency,
+                    'reason': m.reason
+                } for m in rec_data.get('medication_recommendations', [])[:3]
+            ],
+            'lab_recommendations': [
+                {
+                    'test_name': l.test_name,
+                    'frequency': l.frequency,
+                    'reason': l.reason
+                } for l in rec_data.get('lab_recommendations', [])[:3]
+            ],
+            'question_recommendations': [
+                {
+                    'question': q.question,
+                    'reason': q.reason
+                } for q in rec_data.get('question_recommendations', [])[:3]
+            ]
         })
     
     return result
