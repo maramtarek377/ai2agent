@@ -660,29 +660,28 @@ def output_results(state: State) -> dict:
         result.update({
             'medication_recommendations': [
                 {
-                    'name': m.name,
-                    'dosage': m.dosage,
-                    'frequency': m.frequency,
-                    'reason': m.reason
+                    'name': m['name'],
+                    'dosage': m['dosage'],
+                    'frequency': m['frequency'],
+                    'reason': m['reason']
                 } for m in rec_data.get('medication_recommendations', [])[:3]
             ],
             'lab_recommendations': [
                 {
-                    'test_name': l.test_name,
-                    'frequency': l.frequency,
-                    'reason': l.reason
+                    'test_name': l['test_name'],
+                    'frequency': l['frequency'],
+                    'reason': l['reason']
                 } for l in rec_data.get('lab_recommendations', [])[:3]
             ],
             'question_recommendations': [
                 {
-                    'question': q.question,
-                    'reason': q.reason
+                    'question': q['question'],
+                    'reason': q['reason']
                 } for q in rec_data.get('question_recommendations', [])[:3]
             ]
         })
     
     return result
-
 # Build and compile state graph
 graph_builder = StateGraph(State)
 for node in ['risk_assessment', 'generate_recommendations', 'evaluate_recommendations', 'output_results']:
