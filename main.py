@@ -519,24 +519,7 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
                 "rationale": "Complete thyroid function assessment"
             })
     
-    # Build medication recommendation section
-    medication_section = []
-    if specialty_meds:
-        medication_section.append("Available Medications in Database:")
-        for med in specialty_meds:
-            med_info = f"- {med.name} ({med.active_ingredient}): "
-            if med.dosage_forms:
-                med_info += f"Available forms: {', '.join(med.dosage_forms)}. "
-            if med.contraindications:
-                med_info += f"Contraindications: {', '.join(med.contraindications[:2])}. "
-            medication_section.append(med_info)
-    else:
-        medication_section.append("No specialty medications found in database")
-    
-    medication_section.append("\nMedication Needs Based on Patient Condition:")
-    for need in medication_needs:
-        medication_section.append(f"- {need['condition']} ({need['priority']} priority)")
-    
+    # Build prompt parts
     prompt_parts = [
         f"Generate comprehensive {specialty} recommendations for this patient:",
         patient_profile,
@@ -547,17 +530,13 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         "",
         current_meds_str,
         "",
-        "\n".join(medication_section),
-        "",
         "Provide recommendations in this exact JSON format:",
         "{",
         '    "doctor_recommendations": [',
         '        "Key clinical findings and prioritized risk factors",',
         '        "Summary of medication recommendations",',
         '        "Lab test recommendations with rationale",',
-        '        "Monitoring plan and follow-up schedule",',
-        '        "Critical questions to ask patient",',
-        '        "Red flags requiring immediate attention"',
+        '        "Monitoring plan and follow-up schedule"',
         '    ],',
         '    "medication_recommendations": [',
         '        {',
@@ -578,12 +557,34 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '            "urgency": "when to perform (immediately/soon/routine)"',
         '        }',
         '    ],',
+        '    "critical_questions": {',
+        '        "symptoms": ["list of symptom-related questions specific to patient condition"],',
+        '        "lifestyle": ["list of lifestyle questions relevant to specialty"],',
+        '        "medication": ["list of medication-specific questions"],',
+        '        "family_history": ["list of family history questions"]',
+        '    },',
+        '    "red_flags": {',
+        '        "symptoms": ["list of concerning symptoms requiring immediate attention"],',
+        '        "vitals": ["list of concerning vital sign thresholds"],',
+        '        "labs": ["list of concerning lab value thresholds"]',
+        '    },',
         '    "diet_plan": {',
         '        "description": "brief dietary recommendations specific to condition",',
         '        "key_focus": ["list", "of", "dietary", "priorities"],',
         '        "avoid": ["list", "of", "foods", "to", "avoid"]',
         '    }',
         "}",
+        "",
+        "Critical Questions Guidelines:",
+        "1. symptoms: Generate 3-5 specific symptom questions relevant to the patient's conditions and risks",
+        "2. lifestyle: Generate 2-3 lifestyle questions that could reveal important risk factors",
+        "3. medication: Generate 2-3 questions about current medication use and adherence",
+        "4. family_history: Generate 1-2 questions about family history that could impact care",
+        "",
+        "Red Flags Guidelines:",
+        "1. symptoms: List 3-5 concerning symptoms that would require immediate attention",
+        "2. vitals: List vital sign thresholds that would be concerning (with values)",
+        "3. labs: List lab value thresholds that would be concerning (with values)",
         "",
         "Medication Recommendation Guidelines:",
         "1. For each identified medication need:",
@@ -704,6 +705,8 @@ def output_results(state: State) -> dict:
             'doctor_recommendations': rec_data.get('doctor_recommendations', [])[:6],
             'medication_recommendations': rec_data.get('medication_recommendations', [])[:3],
             'required_labs': rec_data.get('required_labs', [])[:3],
+            'critical_questions': rec_data.get('critical_questions', {}),
+            'red_flags': rec_data.get('red_flags', {}),
             'diet_plan': rec_data.get('diet_plan', {})
         })
     
