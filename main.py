@@ -2,7 +2,7 @@ import os
 import json
 import re
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import TypedDict, Optional, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -75,12 +75,30 @@ class Medicine(BaseModel):
     contraindications: Optional[List[str]] = None
     interactions: Optional[List[str]] = None
 
+class SuggestedMedication(BaseModel):
+    name: str
+    dosage: str
+    duration: str
+    rationale: str
+    priority: str
+    time_to_take: str
+    wait_time: Optional[str] = None
+
+class LabTest(BaseModel):
+    name: str
+    reason: str
+    frequency: str
+    next_due: str
+    preparation: Optional[str] = None
+
 class Recommendations(BaseModel):
     patient_recommendations: Optional[List[str]] = None
     diet_plan: Optional[dict] = None
     exercise_plan: Optional[dict] = None
     nutrition_targets: Optional[dict] = None
     doctor_recommendations: Optional[List[str]] = None
+    suggested_medications: Optional[List[SuggestedMedication]] = None
+    required_labs: Optional[List[LabTest]] = None
 
 class State(TypedDict):
     patient_data: dict
@@ -449,77 +467,12 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
     if input_values.get('Sleep_Hours_Per_Day', 0) < 6:
         questions_to_ask.append("Sleep quality and any sleep disturbances")
     
-    # Generate lab recommendations based on patient status
-    lab_recommendations = []
-    
-    if specialty.lower() == "cardiology":
-        if input_values.get('hypertension'):
-            lab_recommendations.append({
-                "test": "Basic metabolic panel",
-                "frequency": "Annually",
-                "rationale": "Monitor electrolytes and kidney function in hypertensive patients"
-            })
-            if input_values.get('Blood_Pressure', 0) > 140:
-                lab_recommendations.append({
-                    "test": "Urinalysis",
-                    "frequency": "Now and annually",
-                    "rationale": "Assess for proteinuria in uncontrolled hypertension"
-                })
-        
-        if parse_probability(risk_probs['Heart Disease']) > 0.2:
-            lab_recommendations.append({
-                "test": "Lipid panel",
-                "frequency": "Every 6 months",
-                "rationale": "Monitor LDL in high CVD risk patient"
-            })
-            
-            if input_values.get('is_smoking'):
-                lab_recommendations.append({
-                    "test": "High-sensitivity CRP",
-                    "frequency": "Annually",
-                    "rationale": "Assess inflammatory markers in smoker with high CVD risk"
-                })
-    
-    elif specialty.lower() == "endocrinology":
-        if parse_probability(risk_probs['Diabetes']) > 0.3:
-            lab_recommendations.append({
-                "test": "Hemoglobin A1c",
-                "frequency": "Every 3 months",
-                "rationale": "Monitor glycemic control in high diabetes risk"
-            })
-            
-            if input_values.get('BMI', 0) > 30:
-                lab_recommendations.append({
-                    "test": "Fasting insulin",
-                    "frequency": "Now",
-                    "rationale": "Assess insulin resistance in obese patient"
-                })
-        
-        if input_values.get('admission_tsh'):
-            lab_recommendations.append({
-                "test": "Free T4",
-                "frequency": "Now",
-                "rationale": "Complete thyroid function assessment"
-            })
-    
-    # Medication analysis section
-    medication_analysis = []
-    if medications and specialty_meds:
-        for med in medications:
-            for spec_med in specialty_meds:
-                if med.medicationName.lower() in spec_med.name.lower():
-                    interaction_warning = ""
-                    if spec_med.interactions:
-                        for other_med in medications:
-                            if other_med.medicationName != med.medicationName and \
-                               any(other_med.medicationName.lower() in inter.lower() for inter in spec_med.interactions):
-                                interaction_warning = f"WARNING: Potential interaction with {other_med.medicationName}. "
-                    
-                    medication_analysis.append({
-                        "current_med": med.medicationName,
-                        "related_specialty_med": spec_med.name,
-                        "analysis": f"{interaction_warning}Consider adjusting dosage or timing based on patient's {specialty} condition."
-                    })
+    # Calculate next due dates for lab tests
+    today = date.today()
+    next_month = today + timedelta(days=30)
+    next_3_months = today + timedelta(days=90)
+    next_6_months = today + timedelta(days=180)
+    next_year = today + timedelta(days=365)
     
     prompt_parts = [
         f"Generate comprehensive {specialty} recommendations for this patient:",
@@ -546,19 +499,24 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '        "Red flags requiring immediate attention",',
         '        "Medication interaction warnings and management"',
         '    ],',
-        '    "medication_analysis": [',
+        '    "suggested_medications": [',
         '        {',
-        '            "current_medication": "name",',
-        '            "issues": "potential problems or interactions",',
-        '            "recommendation": "specific adjustment or monitoring"',
+        '            "name": "Medication name from available list",',
+        '            "dosage": "Recommended dosage per day",',
+        '            "duration": "Recommended duration of treatment (e.g., 3 months)",',
+        '            "rationale": "Why this medication is recommended for this patient",',
+        '            "priority": "High/Medium/Low based on patient condition",',
+        '            "time_to_take": "Best time of day to take (morning/evening/with food)",',
+        '            "wait_time": "Hours to wait before/after other medications if needed"',
         '        }',
         '    ],',
         '    "required_labs": [',
         '        {',
-        '            "test_name": "name",',
-        '            "frequency": "how often",',
-        '            "rationale": "clinical reason",',
-        '            "urgency": "when to perform (immediately/soon/routine)"',
+        '            "name": "Lab test name",',
+        '            "reason": "Why this test is needed for this patient",',
+        '            "frequency": "How often to repeat (e.g., every 3 months)",',
+        '            "next_due": "When next test should be (YYYY-MM-DD)",',
+        '            "preparation": "Any special preparation needed (fasting, etc.)"',
         '        }',
         '    ],',
         '    "patient_questions": [',
@@ -573,23 +531,26 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         "- Include duration for any new medications (e.g., 'for 3 months')",
         "- Highlight critical medication interactions and how to manage them",
         "- Recommend labs based on patient's specific risk factors and current status",
-        "- Include timing for when labs should be performed (immediately, soon, routine)",
         f"- Ask relevant questions based on: {', '.join([f'{k}={v}' for k,v in input_values.items()])}",
         "- Provide clear follow-up timeline",
         "",
-        "Medication Analysis:",
-        "For each current medication relevant to this specialty:",
-        "- Identify potential issues with current regimen",
-        "- Suggest specific adjustments if needed",
-        "- Note any critical interactions with other medications",
-        "- Provide timing recommendations if medications need to be spaced apart",
+        "Suggested Medications Requirements:",
+        "- For each recommended medication, include:",
+        "  - Exact name matching available medications list",
+        "  - Specific dosage (e.g., '50 mg twice daily')",
+        "  - Treatment duration (e.g., '3 months then reassess')",
+        "  - Clear rationale linking to patient's conditions",
+        "  - Priority level based on clinical urgency",
+        "  - Best time to take (considering other meds and condition)",
+        "  - Any required wait times between medications",
         "",
-        "Lab Recommendations:",
-        "Only recommend labs that are clinically indicated based on:",
-        f"- Patient's current values: {json.dumps({k:v for k,v in input_values.items() if v is not None})}",
-        f"- Risk probabilities: Diabetes={risk_probs['Diabetes']}, CVD={risk_probs['Heart Disease']}",
-        "- Current medications",
-        "- Specialty guidelines",
+        "Lab Test Requirements:",
+        "- For each recommended lab test:",
+        "  - Use standard test names",
+        "  - Explain why needed for THIS patient",
+        "  - Specify frequency based on guidelines",
+        f"  - Calculate next due date (today is {today.strftime('%Y-%m-%d')})",
+        "  - Note any special preparation",
         "",
         "Patient Questions:",
         "Generate specific questions to ask THIS patient based on their:",
@@ -641,6 +602,13 @@ def generate_recommendations(state: State) -> dict:
                 else:
                     processed_recs.append(rec)
             data['doctor_recommendations'] = processed_recs
+        
+        # Convert suggested medications and labs to proper models
+        if 'suggested_medications' in data:
+            data['suggested_medications'] = [SuggestedMedication(**med) for med in data['suggested_medications']]
+        
+        if 'required_labs' in data:
+            data['required_labs'] = [LabTest(**lab) for lab in data['required_labs']]
             
         return {'recommendations': Recommendations(**data)}
     except json.JSONDecodeError as e:
@@ -689,7 +657,7 @@ def output_results(state: State) -> dict:
         rec_data = state['recommendations'].dict()
         result.update({
             'doctor_recommendations': rec_data.get('doctor_recommendations', [])[:6],
-            'medication_analysis': rec_data.get('medication_analysis', [])[:3],
+            'suggested_medications': rec_data.get('suggested_medications', [])[:3],
             'required_labs': rec_data.get('required_labs', [])[:3],
             'patient_questions': rec_data.get('patient_questions', [])[:3]
         })
