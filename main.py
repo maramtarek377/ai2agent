@@ -81,6 +81,7 @@ class Recommendations(BaseModel):
     exercise_plan: Optional[dict] = None
     nutrition_targets: Optional[dict] = None
     doctor_recommendations: Optional[List[str]] = None
+    medication_recommendations: Optional[List[dict]] = None
 
 class State(TypedDict):
     patient_data: dict
@@ -399,158 +400,205 @@ def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: L
 
 def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: List[Medication], 
                          available_meds: List[Medicine], specialty: str) -> str:
-    """Generate dynamic prompt for specialist recommendations with detailed structured output"""
+    """Generate dynamic prompt for specialist recommendations with detailed medication analysis"""
     patient_profile = build_patient_profile(input_values)
     
     # Filter medicines by specialty
     specialty_meds = [m for m in available_meds if specialty.lower() in m.specialization.lower()]
     
-    # Current medications string
+    # Analyze current medications for potential issues
     current_meds_str = ""
     if medications:
         current_meds_str = "Current Medications:\n"
         for med in medications:
             current_meds_str += f"- {med.medicationName} ({med.dosage}, {med.frequency})\n"
     
-    # Generate dynamic questions based on patient inputs
-    questions_to_ask = []
+    # Generate medication recommendations based on patient data and specialty
+    medication_needs = []
     
-    # Cardiology-specific questions
+    # Cardiology-specific medication needs
     if specialty.lower() == "cardiology":
         if input_values.get('hypertension'):
-            questions_to_ask.append("Duration and severity of hypertension symptoms")
-            questions_to_ask.append("Any episodes of chest pain or palpitations")
-        if input_values.get('is_smoking'):
-            questions_to_ask.append("Smoking history (pack-years)")
-        if input_values.get('CVD_Family_History'):
-            questions_to_ask.append("Details of family history of cardiovascular disease")
-        if input_values.get('Blood_Pressure', 0) > 140:
-            questions_to_ask.append("Any symptoms of hypertensive urgency (headache, visual changes)")
+            medication_needs.append({
+                "condition": "Hypertension",
+                "priority": "High" if input_values['Blood_Pressure'] > 140 else "Moderate"
+            })
+        if parse_probability(risk_probs['Heart Disease']) > 0.2:
+            medication_needs.append({
+                "condition": "Cardiovascular Disease Prevention",
+                "priority": "High" if parse_probability(risk_probs['Heart Disease']) > 0.3 else "Moderate"
+            })
         if input_values.get('ld_value', 0) > 130:
-            questions_to_ask.append("Previous attempts at cholesterol management")
+            medication_needs.append({
+                "condition": "Hyperlipidemia",
+                "priority": "High" if input_values['ld_value'] > 160 else "Moderate"
+            })
     
-    # Endocrinology-specific questions
+    # Endocrinology-specific medication needs
     elif specialty.lower() == "endocrinology":
         if parse_probability(risk_probs['Diabetes']) > 0.3:
-            questions_to_ask.append("Symptoms of hyperglycemia (polyuria, polydipsia)")
-            questions_to_ask.append("History of hypoglycemic episodes")
+            medication_needs.append({
+                "condition": "Diabetes Prevention",
+                "priority": "High" if parse_probability(risk_probs['Diabetes']) > 0.5 else "Moderate"
+            })
         if input_values.get('BMI', 0) > 30:
-            questions_to_ask.append("Weight history and previous weight loss attempts")
-        if input_values.get('hemoglobin_a1c', 0) > 5.7:
-            questions_to_ask.append("Dietary habits and carbohydrate intake patterns")
+            medication_needs.append({
+                "condition": "Obesity Management",
+                "priority": "High" if input_values['BMI'] > 35 else "Moderate"
+            })
+        if input_values.get('hemoglobin_a1c', 0) > 6.5:
+            medication_needs.append({
+                "condition": "Diabetes Treatment",
+                "priority": "High"
+            })
+    
+    # Generate lab recommendations based on patient status
+    lab_recommendations = []
+    
+    if specialty.lower() == "cardiology":
+        if input_values.get('hypertension'):
+            lab_recommendations.append({
+                "test": "Basic metabolic panel",
+                "frequency": "Annually",
+                "rationale": "Monitor electrolytes and kidney function in hypertensive patients"
+            })
+            if input_values.get('Blood_Pressure', 0) > 140:
+                lab_recommendations.append({
+                    "test": "Urinalysis",
+                    "frequency": "Now and annually",
+                    "rationale": "Assess for proteinuria in uncontrolled hypertension"
+                })
+        
+        if parse_probability(risk_probs['Heart Disease']) > 0.2:
+            lab_recommendations.append({
+                "test": "Lipid panel",
+                "frequency": "Every 6 months",
+                "rationale": "Monitor LDL in high CVD risk patient"
+            })
+            
+            if input_values.get('is_smoking'):
+                lab_recommendations.append({
+                    "test": "High-sensitivity CRP",
+                    "frequency": "Annually",
+                    "rationale": "Assess inflammatory markers in smoker with high CVD risk"
+                })
+    
+    elif specialty.lower() == "endocrinology":
+        if parse_probability(risk_probs['Diabetes']) > 0.3:
+            lab_recommendations.append({
+                "test": "Hemoglobin A1c",
+                "frequency": "Every 3 months",
+                "rationale": "Monitor glycemic control in high diabetes risk"
+            })
+            
+            if input_values.get('BMI', 0) > 30:
+                lab_recommendations.append({
+                    "test": "Fasting insulin",
+                    "frequency": "Now",
+                    "rationale": "Assess insulin resistance in obese patient"
+                })
+        
         if input_values.get('admission_tsh'):
-            questions_to_ask.append("Symptoms of thyroid dysfunction (fatigue, weight changes)")
+            lab_recommendations.append({
+                "test": "Free T4",
+                "frequency": "Now",
+                "rationale": "Complete thyroid function assessment"
+            })
     
-    # General questions based on inputs
-    if input_values.get('Stress_Level', 0) > 6:
-        questions_to_ask.append("Stress management techniques currently used")
-    if input_values.get('Exercise_Hours_Per_Week', 0) < 2:
-        questions_to_ask.append("Barriers to physical activity")
-    if input_values.get('Sleep_Hours_Per_Day', 0) < 6:
-        questions_to_ask.append("Sleep quality and any sleep disturbances")
+    # Build medication recommendation section
+    medication_section = []
+    if specialty_meds:
+        medication_section.append("Available Medications in Database:")
+        for med in specialty_meds:
+            med_info = f"- {med.name} ({med.active_ingredient}): "
+            if med.dosage_forms:
+                med_info += f"Available forms: {', '.join(med.dosage_forms)}. "
+            if med.contraindications:
+                med_info += f"Contraindications: {', '.join(med.contraindications[:2])}. "
+            medication_section.append(med_info)
+    else:
+        medication_section.append("No specialty medications found in database")
     
-    # Build the structured prompt
+    medication_section.append("\nMedication Needs Based on Patient Condition:")
+    for need in medication_needs:
+        medication_section.append(f"- {need['condition']} ({need['priority']} priority)")
+    
     prompt_parts = [
-        f"Generate comprehensive {specialty} recommendations for this patient in a structured format:",
-        "",
-        "Patient Profile:",
+        f"Generate comprehensive {specialty} recommendations for this patient:",
         patient_profile,
         "",
-        "Health Risk Probabilities:",
+        "Health Risks:",
         f"- Diabetes: {risk_probs['Diabetes']}",
         f"- Heart Disease: {risk_probs['Heart Disease']}",
         "",
         current_meds_str,
         "",
-        f"Available {specialty} Medications:",
-        "\n".join([f"- {m.name} ({m.active_ingredient})" for m in specialty_meds]) if specialty_meds else "None",
+        "\n".join(medication_section),
         "",
-        "Return recommendations in this exact structured JSON format:",
+        "Provide recommendations in this exact JSON format:",
         "{",
-        '    "clinical_assessment": {',
-        '        "key_findings": ["list of 3-5 most clinically relevant findings based on patient profile"],',
-        '        "risk_factors": ["prioritized list of modifiable risk factors"],',
-        '        "prognosis": "brief assessment of likely outcomes if no changes are made"',
-        '    },',
-        '    "medication_plan": {',
-        '        "current_medication_review": [',
-        '            {',
-        '                "medication": "name",',
-        '                "assessment": "appropriateness for this patient",',
-        '                "recommendation": "continue/adjust/discontinue with rationale"',
-        '            }',
-        '        ],',
-        '        "new_medications": [',
-        '            {',
-        '                "name": "medication name from available list",',
-        '                "dosage": "specific dosage in mg",',
-        '                "frequency": "times per day/week",',
-        '                "duration": "how long to take",',
-        '                "rationale": "why this is being prescribed",',
-        '                "monitoring": "what to monitor and how often"',
-        '            }',
-        '        ],',
-        '        "interaction_warnings": [',
-        '            {',
-        '                "medication_pair": "med1 + med2",',
-        '                "interaction": "nature of interaction",',
-        '                "management": "how to mitigate risk"',
-        '            }',
-        '        ]',
-        '    },',
-        '    "monitoring_plan": {',
-        '        "vital_signs": {',
-        '            "frequency": "how often to check",',
-        '            "targets": {',
-        '                "blood_pressure": "target range",',
-        '                "heart_rate": "target range",',
-        '                "weight": "target frequency and goal"',
-        '            }',
-        '        },',
-        '        "laboratory_tests": [',
-        '            {',
-        '                "test": "test name",',
-        '                "frequency": "how often",',
-        '                "rationale": "clinical reason",',
-        '                "urgency": "immediately/soon/routine"',
-        '            }',
-        '        ],',
-        '        "symptom_monitoring": [',
-        '            "list of symptoms patient should track and report"',
-        '        ]',
-        '    },',
-        '    "follow_up_plan": {',
-        '        "initial_follow_up": "when to follow up first (e.g., 1 week)",',
-        '        "ongoing_follow_up": "subsequent schedule",',
-        '        "contingencies": [',
-        '            {',
-        '                "condition": "situation that would require earlier follow-up",',
-        '                "action": "what to do if this occurs"',
-        '            }',
-        '        ]',
-        '    },',
-        '    "patient_education": {',
-        '        "key_points": ["list of 3-5 most important things patient should understand"],',
-        '        "medication_instructions": ["specific instructions about how/when to take each med"],',
-        '        "warning_signs": ["symptoms that should prompt immediate medical attention"]',
-        '    },',
-        '    "referrals": [',
+        '    "doctor_recommendations": [',
+        '        "Key clinical findings and prioritized risk factors",',
+        '        "Summary of medication recommendations",',
+        '        "Lab test recommendations with rationale",',
+        '        "Monitoring plan and follow-up schedule",',
+        '        "Critical questions to ask patient",',
+        '        "Red flags requiring immediate attention"',
+        '    ],',
+        '    "medication_recommendations": [',
         '        {',
-        '            "specialty": "type of specialist",',
-        '            "urgency": "when referral should happen",',
-        '            "reason": "why referral is needed"',
+        '            "name": "medication name (from database if available)",',
+        '            "type": "new/adjustment/discontinuation",',
+        '            "dosage": "specific dosage with units (e.g., 50mg)",',
+        '            "frequency": "how often (e.g., twice daily)",',
+        '            "duration": "how long to take (e.g., 3 months)",',
+        '            "rationale": "why this medication is recommended",',
+        '            "source": "database/general"',
         '        }',
-        '    ]',
+        '    ],',
+        '    "required_labs": [',
+        '        {',
+        '            "test_name": "name",',
+        '            "frequency": "how often",',
+        '            "rationale": "clinical reason",',
+        '            "urgency": "when to perform (immediately/soon/routine)"',
+        '        }',
+        '    ],',
+        '    "diet_plan": {',
+        '        "description": "brief dietary recommendations specific to condition",',
+        '        "key_focus": ["list", "of", "dietary", "priorities"],',
+        '        "avoid": ["list", "of", "foods", "to", "avoid"]',
+        '    }',
         "}",
         "",
-        "Recommendations should be:",
-        f"- Specific to {specialty} practice guidelines",
-        "- Evidence-based and tailored to this patient's profile",
-        "- Include exact dosages, frequencies, and durations",
-        "- Provide clear monitoring parameters",
-        "- Include specific follow-up timing",
-        "- Highlight critical interactions and how to manage them",
-        "- Return ONLY the JSON object with no additional text"
+        "Medication Recommendation Guidelines:",
+        "1. For each identified medication need:",
+        "   - First check if a suitable medication exists in the available medications list",
+        "   - If found in database:",
+        "     * Use the exact name from database",
+        "     * Recommend appropriate dosage form based on patient condition",
+        "     * Include standard dosage and frequency",
+        "     * Mark source as 'database'",
+        "   - If not found in database:",
+        "     * Recommend general medication class/type",
+        "     * Suggest typical dosage range",
+        "     * Mark source as 'general'",
+        "2. For medication adjustments:",
+        "   - Specify exact changes to current medications",
+        "   - Include rationale for each change",
+        "3. Prioritize recommendations based on:",
+        f"   - Patient's current conditions: {json.dumps(medication_needs)}",
+        f"   - Risk levels: Diabetes={risk_probs['Diabetes']}, CVD={risk_probs['Heart Disease']}",
+        "   - Current medications and potential interactions",
+        "",
+        "Diet Plan Guidelines:",
+        "1. Focus on dietary needs specific to the specialty:",
+        f"   - Cardiology: Heart-healthy, low sodium, low saturated fat",
+        f"   - Endocrinology: Blood sugar control, weight management",
+        "2. Include specific foods to emphasize and avoid",
+        "3. Keep recommendations concise but actionable",
+        "",
+        "Return ONLY the JSON object with no additional text or explanations."
     ]
     
     return "\n".join(prompt_parts)
@@ -636,15 +684,13 @@ def output_results(state: State) -> dict:
             'nutrition_targets': state['recommendations'].nutrition_targets
         })
     else:
-        # Include all doctor-specific outputs in structured format
+        # Include all doctor-specific outputs
         rec_data = state['recommendations'].dict()
         result.update({
-            'clinical_assessment': rec_data.get('clinical_assessment', {}),
-            'medication_plan': rec_data.get('medication_plan', {}),
-            'monitoring_plan': rec_data.get('monitoring_plan', {}),
-            'follow_up_plan': rec_data.get('follow_up_plan', {}),
-            'patient_education': rec_data.get('patient_education', {}),
-            'referrals': rec_data.get('referrals', [])
+            'doctor_recommendations': rec_data.get('doctor_recommendations', [])[:6],
+            'medication_recommendations': rec_data.get('medication_recommendations', [])[:3],
+            'required_labs': rec_data.get('required_labs', [])[:3],
+            'diet_plan': rec_data.get('diet_plan', {})
         })
     
     return result
