@@ -66,6 +66,7 @@ class Medication(BaseModel):
     dosage: str
     frequency: Optional[str] = None
     type: str = "continue" 
+    rationale: Optional[str] = None
 
 class Medicine(BaseModel):
     name: str
@@ -285,7 +286,7 @@ def build_patient_profile(input_values: dict) -> str:
 
 def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: List[Medication]) -> str:
     """Generate dynamic prompt for patient recommendations with personalized diet"""
-    patient_profile = build_patient_profile(input_values)
+    patient_profile = build_patient_profile( patient_data)
    
     # Determine diet requirements based on patient conditions
     diet_requirements = []
@@ -444,7 +445,7 @@ def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: L
 def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: List[Medication], 
                          available_meds: List[Medicine], specialty: str) -> str:
     """Generate dynamic prompt for specialist recommendations with detailed medication analysis"""
-    patient_profile = build_patient_profile(input_values)
+    patient_profile = build_patient_profile( patient_data)
     
     # Filter medicines by specialty and enforce strict specialty boundaries
     specialty_lower = specialty.lower()
