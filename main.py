@@ -185,13 +185,13 @@ def get_available_medicines() -> List[Medicine]:
 def build_patient_profile(input_values: dict) -> str:
     """Construct a detailed patient profile string from input values"""
     profile = []
-    
+   
     # Basic demographics
     if input_values.get('Age'):
         profile.append(f"Age: {input_values['Age']} years")
     if input_values.get('gender'):
         profile.append(f"Gender: {'Male' if input_values['gender'] == 'M' else 'Female'}")
-    
+   
     # Health metrics
     if input_values.get('BMI'):
         bmi = input_values['BMI']
@@ -201,7 +201,7 @@ def build_patient_profile(input_values: dict) -> str:
         elif 25 <= bmi < 30: bmi_status = " (Overweight)"
         else: bmi_status = " (Obese)"
         profile.append(f"BMI: {bmi}{bmi_status}")
-    
+   
     if input_values.get('Blood_Pressure'):
         print("Blood")
         bp = input_values['Blood_Pressure']
@@ -209,7 +209,7 @@ def build_patient_profile(input_values: dict) -> str:
         profile.append(f"Blood Pressure: {bp}{bp_status}")
     if 'hypertension' in input_values:
         profile.append("Blood Pressure: " + ("Hypertension" if input_values['hypertension'] else "Normal"))
-    
+   
     if input_values.get('glucose'):
         glucose = input_values['glucose']
         glucose_status = ""
@@ -217,7 +217,7 @@ def build_patient_profile(input_values: dict) -> str:
         elif 100 <= glucose < 126: glucose_status = " (Prediabetes)"
         else: glucose_status = " (Diabetes)"
         profile.append(f"Glucose: {glucose}{glucose_status}")
-    
+   
     # Lifestyle factors
     if input_values.get('Diet'):
         diet = input_values['Diet'].lower()
@@ -225,7 +225,7 @@ def build_patient_profile(input_values: dict) -> str:
         elif diet == 'unhealthy': diet_desc = "Unhealthy diet"
         else: diet_desc = "Average diet"
         profile.append(diet_desc)
-    
+   
     if input_values.get('Exercise_Hours_Per_Week'):
         exercise = input_values['Exercise_Hours_Per_Week']
         if exercise == 0: ex_desc = "Sedentary (no exercise)"
@@ -233,24 +233,24 @@ def build_patient_profile(input_values: dict) -> str:
         elif exercise < 5: ex_desc = "Moderate activity"
         else: ex_desc = "Active"
         profile.append(f"Exercise: {ex_desc} ({exercise} hrs/week)")
-    
+   
     if input_values.get('Stress_Level'):
         stress = input_values['Stress_Level']
         if stress < 4: stress_desc = "Low stress"
         elif stress < 7: stress_desc = "Moderate stress"
         else: stress_desc = "High stress"
         profile.append(f"Stress Level: {stress}/10 ({stress_desc})")
-    
+   
     # Risk factors
     if input_values.get('is_smoking') is not None:
         profile.append("Smoker" if input_values['is_smoking'] else "Non-smoker")
-    
-    
+   
+   
     if input_values.get('is_alcohol_user') is not None:
         profile.append("Alcohol Use: " + ("Yes" if input_values['is_alcohol_user'] else "No"))
     if input_values.get('CVD_Family_History') is not None:
         profile.append("Family History of CVD: " + ("Yes" if input_values['CVD_Family_History'] else "No"))
-    
+   
     if input_values.get('admission_tsh') is not None:
         tsh = input_values['admission_tsh']
         tsh_status = "N/A" if tsh == 0 else" (Normal)" if 0.4 <= tsh <= 4.0 else " (Low)" if tsh < 0.4 else " (High)"
@@ -260,7 +260,7 @@ def build_patient_profile(input_values: dict) -> str:
         ck_status = "N/A" if ck == 0 else" (Normal)" if ck < 200 else " (Elevated)"
         profile.append(f"Creatine Kinase: {ck} U/L{ck_status}")
     if input_values.get('ld_value') is not None:
-        
+       
         ldl = input_values['ld_value']
         ldl_status = " (N/A)" if ldl==0 else" (Optimal)" if ldl > 140  and ldl < 280 else " (Not Optimal)"
         profile.append(f"LDh : {ldl} mg/dL{ldl_status}")
@@ -279,45 +279,45 @@ def build_patient_profile(input_values: dict) -> str:
     # Regional info
     profile.append("Region: Egypt")
  
-    
+   
     return "\n".join(profile)
 
 def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: List[Medication]) -> str:
     """Generate dynamic prompt for patient recommendations with personalized diet"""
     patient_profile = build_patient_profile(input_values)
-    
+   
     # Determine diet requirements based on patient conditions
     diet_requirements = []
-    
+   
     # Gender-based requirements
     gender = input_values.get('gender', '')
     if gender == 'M':
         diet_requirements.append("higher protein needs")
     elif gender == 'F':
         diet_requirements.append("adequate iron and calcium")
-    
+   
     # Age-based requirements
     age = input_values.get('Age', 0)
     if age > 50:
         diet_requirements.append("higher fiber and calcium")
     if age > 65:
         diet_requirements.append("easier to digest foods")
-    
+   
     # Condition-based requirements
     if input_values.get('hypertension'):
         diet_requirements.append("low sodium (<1500mg/day)")
-    
+   
     diabetes_risk = parse_probability(risk_probs['Diabetes'])
     if diabetes_risk > 0.25:  # >25% risk
         diet_requirements.append("low glycemic index foods")
         if diabetes_risk > 0.5:  # >50% risk
             diet_requirements.append("controlled carbohydrate intake")
-    
+   
     cvd_risk = parse_probability(risk_probs['Heart Disease'])
     if cvd_risk > 0.2:  # >20% risk
         diet_requirements.append("heart-healthy fats")
         diet_requirements.append("low saturated fat")
-    
+   
     bmi = input_values.get('BMI', 0)
     if bmi >= 30:
         diet_requirements.append("calorie-controlled for weight loss")
@@ -326,21 +326,21 @@ def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: L
        # Consider additional factors from patient data
     if input_values.get('is_smoking'):
         diet_requirements.append("antioxidant-rich foods")
-    
+   
     if input_values.get('Stress_Level', 0) > 6:
         diet_requirements.append("stress-reducing nutrients (magnesium, omega-3s)")
-    
+   
     if input_values.get('Sleep_Hours_Per_Day', 0) < 6:
         diet_requirements.append("sleep-promoting foods")
-    
+   
     # Build diet focus description
     diet_focus = f"Focus on: {', '.join(diet_requirements)}" if diet_requirements else "Balanced nutrition"
-    
+   
     # Get exercise and stress details for exercise plan
     exercise_per_week = input_values.get('Exercise_Hours_Per_Week', 0)
     stress_level = input_values.get('Stress_Level', 0)
     target_bmi = max(input_values.get('BMI', 0) - 1, 18.5)  # Aim for healthy BMI
-    
+   
     # Build prompt parts separately to avoid deep nesting
     prompt_parts = [
         "Generate a fully personalized health and nutrition plan for a patient using the profile below:",
@@ -437,7 +437,7 @@ def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: L
         "- Return ONLY the JSON object—no extra text",
         ""
     ]
-    
+   
     return "\n".join(prompt_parts)
 
 def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: List[Medication], 
@@ -631,8 +631,6 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '    "doctor_recommendations": [',
         '        "Key clinical findings and prioritized risk factors",',
         '        "Summary of medication recommendations (SPECIALTY-APPROPRIATE ONLY)",',
-        '        "Lab test recommendations with rationale",',
-        '        "Monitoring plan and follow-up schedule",',
         '        "Critical questions to ask patient",',
         '        "Red flags requiring immediate attention"',
         '    ],',
@@ -672,8 +670,10 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         "   - First check approved specialty medications list",
         "   - If no match, recommend GENERAL CLASS (not specific drug)",
         "   - ALWAYS verify medication is specialty-appropriate",
+        "   - make sure that suggested medication not conflict with current medication and has positive effect",
+        "   - make sure if they conflict tell which has periorty to take and time needed after finish first to stay to take the second due to The active  ingredient in medicine time take to leave body ok ",
         "3. For labs:",
-        "   - Recommend only tests relevant to your specialty",
+        "   - Recommend only tests relevant to your specialty also depend on patient data",
         "   - Include clinical rationale for each test",
         "",
         "Return ONLY the JSON object with no additional text or explanations."
