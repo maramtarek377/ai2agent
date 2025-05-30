@@ -445,8 +445,24 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
     """Generate dynamic prompt for specialist recommendations with detailed medication analysis"""
     patient_profile = build_patient_profile(input_values)
     
-    # Filter medicines by specialty
-    specialty_meds = [m for m in available_meds if specialty.lower() in m.specialization.lower()]
+    # Filter medicines by specialty and enforce strict specialty boundaries
+    specialty_lower = specialty.lower()
+    specialty_meds = []
+    
+    # Define strict specialty boundaries for medications
+    if specialty_lower == "cardiology":
+        specialty_meds = [m for m in available_meds 
+                         if any(s.lower() in ['cardiac', 'cardiovascular', 'hypertension'] 
+                         for s in m.specialization.split(',')]
+        prohibited_conditions = ['diabetes', 'endocrine']
+    elif specialty_lower == "endocrinology":
+        specialty_meds = [m for m in available_meds 
+                          if any(s.lower() in ['diabetes', 'endocrine', 'metabolic'] 
+                          for s in m.specialization.split(','))]
+        prohibited_conditions = ['cardiac', 'cardiovascular', 'hypertension']
+    else:
+        specialty_meds = []
+        prohibited_conditions = []
     
     # Analyze current medications for potential issues
     current_meds_str = ""
@@ -455,56 +471,62 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         for med in medications:
             current_meds_str += f"- {med.medicationName} ({med.dosage}, {med.frequency})\n"
     
-    # Generate medication recommendations based on patient data and specialty
+    # Generate medication recommendations based strictly on specialty
     medication_needs = []
     
-    # Cardiology-specific medication needs
-    if specialty.lower() == "cardiology":
+    # Cardiology-specific medication needs - only cardiac-related conditions
+    if specialty_lower == "cardiology":
         hypertension_status = input_values.get('hypertension', False)
-        blood_pressure = input_values.get('Blood_Pressure', 120)  # Default to normal if not provided
+        blood_pressure = input_values.get('Blood_Pressure', 120)
         
         if hypertension_status or blood_pressure > 130:
             medication_needs.append({
                 "condition": "Hypertension",
-                "priority": "High" if blood_pressure > 140 else "Moderate"
+                "priority": "High" if blood_pressure > 140 else "Moderate",
+                "allowed_types": ["ACE inhibitors", "ARBs", "beta-blockers", "calcium channel blockers", "diuretics"]
             })
             
         if parse_probability(risk_probs['Heart Disease']) > 0.2:
             medication_needs.append({
                 "condition": "Cardiovascular Disease Prevention",
-                "priority": "High" if parse_probability(risk_probs['Heart Disease']) > 0.3 else "Moderate"
+                "priority": "High" if parse_probability(risk_probs['Heart Disease']) > 0.3 else "Moderate",
+                "allowed_types": ["statins", "antiplatelets"]
             })
             
         if input_values.get('ld_value', 0) > 130:
             medication_needs.append({
                 "condition": "Hyperlipidemia",
-                "priority": "High" if input_values['ld_value'] > 160 else "Moderate"
+                "priority": "High" if input_values['ld_value'] > 160 else "Moderate",
+                "allowed_types": ["statins", "fibrates", "PCSK9 inhibitors"]
             })
     
-    # Endocrinology-specific medication needs
-    elif specialty.lower() == "endocrinology":
+    # Endocrinology-specific medication needs - only endocrine-related conditions
+    elif specialty_lower == "endocrinology":
         if parse_probability(risk_probs['Diabetes']) > 0.3:
             medication_needs.append({
                 "condition": "Diabetes Prevention",
-                "priority": "High" if parse_probability(risk_probs['Diabetes']) > 0.5 else "Moderate"
+                "priority": "High" if parse_probability(risk_probs['Diabetes']) > 0.5 else "Moderate",
+                "allowed_types": ["metformin", "SGLT2 inhibitors", "GLP-1 receptor agonists"]
             })
             
         if input_values.get('BMI', 0) > 30:
             medication_needs.append({
                 "condition": "Obesity Management",
-                "priority": "High" if input_values['BMI'] > 35 else "Moderate"
+                "priority": "High" if input_values['BMI'] > 35 else "Moderate",
+                "allowed_types": ["GLP-1 receptor agonists", "orlistat"]
             })
             
         if input_values.get('hemoglobin_a1c', 0) > 6.5:
             medication_needs.append({
                 "condition": "Diabetes Treatment",
-                "priority": "High"
+                "priority": "High",
+                "allowed_types": ["insulin", "combination therapies"]
             })
     
     # Generate lab recommendations based on patient status
     lab_recommendations = []
     
-    if specialty.lower() == "cardiology":
+    if specialty_lower == "cardiology":
         hypertension_status = input_values.get('hypertension', False)
         blood_pressure = input_values.get('Blood_Pressure', 120)
         
@@ -536,7 +558,7 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
                     "rationale": "Assess inflammatory markers in smoker with high CVD risk"
                 })
     
-    elif specialty.lower() == "endocrinology":
+    elif specialty_lower == "endocrinology":
         if parse_probability(risk_probs['Diabetes']) > 0.3:
             lab_recommendations.append({
                 "test": "Hemoglobin A1c",
@@ -558,23 +580,37 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
                 "rationale": "Complete thyroid function assessment"
             })
     
+    # Build strict medication rules section
+    medication_rules = [
+        "STRICT MEDICATION RULES:",
+        f"1. As a {specialty} specialist, you MUST ONLY recommend medications for:",
+        f"   - {specialty}-related conditions",
+        "2. You MUST NOT recommend medications for:",
+        f"   - {', '.join(prohibited_conditions)} conditions" if prohibited_conditions else "   - No restrictions",
+        "3. Medication recommendations must be:",
+        "   - Within your specialty scope",
+        "   - Supported by patient's conditions and risk factors",
+        "   - Compatible with current medications",
+        "",
+        "Violating these rules will result in invalid recommendations."
+    ]
+    
     # Build medication recommendation section
     medication_section = []
     if specialty_meds:
-        medication_section.append("Available Medications in Database:")
-        for med in specialty_meds:
-            med_info = f"- {med.name} ({med.active_ingredient}): "
+        medication_section.append("Approved Specialty Medications in Database:")
+        for med in specialty_meds[:5]:  # Limit to top 5 to avoid overwhelming
+            med_info = f"- {med.name}: {med.specialization}. "
             if med.dosage_forms:
-                med_info += f"Available forms: {', '.join(med.dosage_forms)}. "
-            if med.contraindications:
-                med_info += f"Contraindications: {', '.join(med.contraindications[:2])}. "
+                med_info += f"Forms: {', '.join(med.dosage_forms[:2])}. "
             medication_section.append(med_info)
     else:
-        medication_section.append("No specialty medications found in database")
+        medication_section.append("No specialty-specific medications found in database")
     
-    medication_section.append("\nMedication Needs Based on Patient Condition:")
+    medication_section.append("\nApproved Medication Needs Based on Patient Condition:")
     for need in medication_needs:
         medication_section.append(f"- {need['condition']} ({need['priority']} priority)")
+        medication_section.append(f"  Allowed medication classes: {', '.join(need['allowed_types'])}")
     
     prompt_parts = [
         f"Generate comprehensive {specialty} recommendations for this patient:",
@@ -586,13 +622,15 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         "",
         current_meds_str,
         "",
+        "\n".join(medication_rules),
+        "",
         "\n".join(medication_section),
         "",
         "Provide recommendations in this exact JSON format:",
         "{",
         '    "doctor_recommendations": [',
         '        "Key clinical findings and prioritized risk factors",',
-        '        "Summary of medication recommendations",',
+        '        "Summary of medication recommendations (SPECIALTY-APPROPRIATE ONLY)",',
         '        "Lab test recommendations with rationale",',
         '        "Monitoring plan and follow-up schedule",',
         '        "Critical questions to ask patient",',
@@ -600,13 +638,14 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '    ],',
         '    "medication_recommendations": [',
         '        {',
-        '            "name": "medication name (from database if available)",',
+        '            "name": "SPECIALTY-APPROPRIATE medication only",',
         '            "type": "new/adjustment/discontinuation",',
-        '            "dosage": "specific dosage with units (e.g., 50mg)",',
-        '            "frequency": "how often (e.g., twice daily)",',
-        '            "duration": "how long to take (e.g., 3 months)",',
+        '            "dosage": "specific dosage with units",',
+        '            "frequency": "how often",',
+        '            "duration": "how long to take",',
         '            "rationale": "why this medication is recommended",',
-        '            "source": "database/general"',
+        '            "source": "database/general",',
+        '            "specialty_appropriate": true',
         '        }',
         '    ],',
         '    "required_labs": [',
@@ -614,7 +653,7 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '            "test_name": "name",',
         '            "frequency": "how often",',
         '            "rationale": "clinical reason",',
-        '            "urgency": "when to perform (immediately/soon/routine)"',
+        '            "urgency": "when to perform"',
         '        }',
         '    ],',
         '    "diet_plan": {',
@@ -624,32 +663,18 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '    }',
         "}",
         "",
-        "Medication Recommendation Guidelines:",
-        "1. For each identified medication need:",
-        "   - First check if a suitable medication exists in the available medications list",
-        "   - If found in database:",
-        "     * Use the exact name from database",
-        "     * Recommend appropriate dosage form based on patient condition",
-        "     * Include standard dosage and frequency",
-        "     * Mark source as 'database'",
-        "   - If not found in database:",
-        "     * Recommend general medication class/type",
-        "     * Suggest typical dosage range",
-        "     * Mark source as 'general'",
-        "2. For medication adjustments:",
-        "   - Specify exact changes to current medications",
-        "   - Include rationale for each change",
-        "3. Prioritize recommendations based on:",
-        f"   - Patient's current conditions: {json.dumps(medication_needs)}",
-        f"   - Risk levels: Diabetes={risk_probs['Diabetes']}, CVD={risk_probs['Heart Disease']}",
-        "   - Current medications and potential interactions",
-        "",
-        "Diet Plan Guidelines:",
-        "1. Focus on dietary needs specific to the specialty:",
-        f"   - Cardiology: Heart-healthy, low sodium, low saturated fat",
-        f"   - Endocrinology: Blood sugar control, weight management",
-        "2. Include specific foods to emphasize and avoid",
-        "3. Keep recommendations concise but actionable",
+        "SPECIALTY-SPECIFIC GUIDELINES:",
+        f"1. As a {specialty} specialist:",
+        "   - Focus ONLY on conditions within your specialty",
+        "   - Do NOT make recommendations outside your scope",
+        "   - Flag any concerning findings from other specialties",
+        "2. For medications:",
+        "   - First check approved specialty medications list",
+        "   - If no match, recommend GENERAL CLASS (not specific drug)",
+        "   - ALWAYS verify medication is specialty-appropriate",
+        "3. For labs:",
+        "   - Recommend only tests relevant to your specialty",
+        "   - Include clinical rationale for each test",
         "",
         "Return ONLY the JSON object with no additional text or explanations."
     ]
