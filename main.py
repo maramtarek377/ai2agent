@@ -65,6 +65,7 @@ class Medication(BaseModel):
     medicationName: str
     dosage: str
     frequency: Optional[str] = None
+    type: str = "continue" 
 
 class Medicine(BaseModel):
     name: str
@@ -638,6 +639,7 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '        {',
         '            "name": "SPECIALTY-APPROPRIATE medication only",',
         '            "type": "new/adjustment/discontinuation",',
+        '            "current_status": "new/current",', 
         '            "dosage": "specific dosage with units",',
         '            "frequency": "how often",',
         '            "duration": "how long to take",',
@@ -675,6 +677,14 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         "3. For labs:",
         "   - Recommend only tests relevant to your specialty also depend on patient data",
         "   - Include clinical rationale for each test",
+        "4. For current medications:",
+        "   - Evaluate each current medication for:",
+        "     * Continuation (if beneficial and no conflicts)",
+        "     * Discontinuation (if harmful or conflicting)",
+        "   - For each current medication recommendation:",
+        '     * Set "type": "continue" or "stop"',
+        "     * Provide rationale for decision",
+        "     * Specify any dosage adjustments if continuing",
         "",
         "Return ONLY the JSON object with no additional text or explanations."
     ]
@@ -718,7 +728,50 @@ def generate_recommendations(state: State) -> dict:
                 else:
                     processed_recs.append(rec)
             data['doctor_recommendations'] = processed_recs
+        
+        # Process medication recommendations
+        if 'medication_recommendations' in data:
+            updated_medications = []
             
+            # First process current medications
+            for med in medications:
+                # Default to continue unless specified otherwise
+                med.type = "continue"
+                updated_medications.append(med)
+            
+            # Now apply recommendations
+            for med_rec in data['medication_recommendations']:
+                if med_rec.get('current_status') == 'current':
+                    # Find and update existing medication
+                    for med in updated_medications:
+                        if med.medicationName.lower() == med_rec['name'].lower():
+                            # Set type based on recommendation
+                            med.type = 'continue' if med_rec['type'] in ['continue', 'adjustment'] else 'stop'
+                            
+                            # Update dosage and frequency if adjustment
+                            if med_rec['type'] == 'adjustment':
+                                med.dosage = med_rec.get('dosage', med.dosage)
+                                med.frequency = med_rec.get('frequency', med.frequency)
+                            
+                            # Add rationale if available
+                            if 'rationale' in med_rec:
+                                med.rationale = med_rec['rationale']
+                            break
+                elif med_rec.get('type') == 'new':
+                    # Add new medications to the list
+                    new_med = Medication(
+                        medicationName=med_rec['name'],
+                        dosage=med_rec.get('dosage', ''),
+                        frequency=med_rec.get('frequency', ''),
+                        type='new'
+                    )
+                    if 'rationale' in med_rec:
+                        new_med.rationale = med_rec['rationale']
+                    updated_medications.append(new_med)
+            
+            # Update state with processed medications
+            state['current_medications'] = updated_medications
+        
         return {'recommendations': Recommendations(**data)}
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse LLM response: {str(e)}")
@@ -750,9 +803,11 @@ def output_results(state: State) -> dict:
         'current_medications': [{
             'medicationName': m.medicationName,
             'dosage': m.dosage,
-            'frequency': m.frequency
+            'frequency': m.frequency,
+            'type': m.type 
         } for m in state.get('current_medications', [])]
     }
+    
     
     if state['sent_for'] == 0:
         result.update({
