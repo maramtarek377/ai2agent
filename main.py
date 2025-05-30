@@ -61,6 +61,29 @@ except Exception as e:
     raise
 
 # Pydantic models
+# Initialize MongoDB client
+try:
+    logger.info("Initializing MongoDB connection...")
+    tmp_client = MongoClient(MONGODB_URI)
+    db = tmp_client.get_default_database()
+    patients_col = db["patients"]
+    metrics_col = db["healthmetrics"]
+    medications_col = db["medications"]
+    medicines_col = db["medicines"]
+    logger.info("MongoDB connection established")
+except Exception as e:
+    logger.error(f"Failed to connect to MongoDB: {str(e)}")
+    raise
+
+# Initialize LLM
+try:
+    logger.info("Initializing LLM...")
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", api_key=GOOGLE_API_KEY)
+    logger.info("LLM initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize LLM: {str(e)}")
+    raise
+
 class Medication(BaseModel):
     medicationName: str
     dosage: str
@@ -203,10 +226,11 @@ def build_patient_profile(input_values: dict) -> str:
         profile.append(f"BMI: {bmi}{bmi_status}")
     
     if input_values.get('Blood_Pressure'):
+        print("Blood")
         bp = input_values['Blood_Pressure']
         bp_status = " (Normal)" if bp <= 120 else " (Elevated)" if bp <= 129 else " (Hypertension)"
         profile.append(f"Blood Pressure: {bp}{bp_status}")
-    elif 'hypertension' in input_values:
+    if 'hypertension' in input_values:
         profile.append("Blood Pressure: " + ("Hypertension" if input_values['hypertension'] else "Normal"))
     
     if input_values.get('glucose'):
@@ -241,14 +265,45 @@ def build_patient_profile(input_values: dict) -> str:
         profile.append(f"Stress Level: {stress}/10 ({stress_desc})")
     
     # Risk factors
-    if input_values.get('is_smoking'):
+    if input_values.get('is_smoking') is not None:
         profile.append("Smoker" if input_values['is_smoking'] else "Non-smoker")
     
-    if input_values.get('hypertension'):
-        profile.append("Hypertension" if input_values['hypertension'] else "Normal blood pressure")
     
+    if input_values.get('is_alcohol_user') is not None:
+        profile.append("Alcohol Use: " + ("Yes" if input_values['is_alcohol_user'] else "No"))
+    if input_values.get('CVD_Family_History') is not None:
+        profile.append("Family History of CVD: " + ("Yes" if input_values['CVD_Family_History'] else "No"))
+    
+    if input_values.get('admission_tsh') is not None:
+        tsh = input_values['admission_tsh']
+        tsh_status = "N/A" if tsh == 0 else" (Normal)" if 0.4 <= tsh <= 4.0 else " (Low)" if tsh < 0.4 else " (High)"
+        profile.append(f"TSH: {tsh} mIU/L{tsh_status}")
+    if input_values.get('creatine_kinase_ck') is not None:
+        ck = input_values['creatine_kinase_ck']
+        ck_status = "N/A" if ck == 0 else" (Normal)" if ck < 200 else " (Elevated)"
+        profile.append(f"Creatine Kinase: {ck} U/L{ck_status}")
+    if input_values.get('ld_value') is not None:
+        print("ldh")
+        ldl = input_values['ld_value']
+        ldl_status = " (N/A)" if ldl==0 else" (Optimal)" if ldl > 140  and ldl < 280 else " (Not Optimal)"
+        profile.append(f"LDh : {ldl} mg/dL{ldl_status}")
+    if input_values.get('hemoglobin_a1c') is not None:
+        a1c = input_values['hemoglobin_a1c']
+        a1c_status = "N/A" if a1c == 0 else" (Normal)" if a1c < 5.7 else " (Prediabetes)" if a1c < 6.5 else " (Diabetes)"
+        profile.append(f"Hemoglobin A1c: {a1c}%{a1c_status}")
+    if input_values.get('Sleep_Hours_Per_Day') is not None:
+        sleep = input_values['Sleep_Hours_Per_Day']
+        sleep_status = " (Insufficient)" if sleep < 7 else " (Adequate)" if sleep <= 9 else " (Excessive)"
+        profile.append(f"Sleep: {sleep} hours/day{sleep_status}")
+
+    if input_values.get('Diabetes_pedigree') is not None :
+        profile.append("Family History of Diabetes: " + ("Yes" if input_values['Diabetes_pedigree'] else "No"))
+
     # Regional info
     profile.append("Region: Egypt")
+    print("JHHKKNKNKNKNMKJ-----------------------")
+    print(input_values)
+    print(profile)
     
     return "\n".join(profile)
 
@@ -293,6 +348,15 @@ def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: L
         diet_requirements.append("calorie-controlled for weight loss")
     elif bmi >= 25:
         diet_requirements.append("moderate calorie reduction")
+       # Consider additional factors from patient data
+    if input_values.get('is_smoking'):
+        diet_requirements.append("antioxidant-rich foods")
+    
+    if input_values.get('Stress_Level', 0) > 6:
+        diet_requirements.append("stress-reducing nutrients (magnesium, omega-3s)")
+    
+    if input_values.get('Sleep_Hours_Per_Day', 0) < 6:
+        diet_requirements.append("sleep-promoting foods")
     
     # Build diet focus description
     diet_focus = f"Focus on: {', '.join(diet_requirements)}" if diet_requirements else "Balanced nutrition"
@@ -373,19 +437,19 @@ def generate_patient_prompt(input_values: dict, risk_probs: dict, medications: L
         f'       "current_weekly_exercise": "{exercise_per_week} sessions/week",',
         '       "suggestion": "If current frequency is below the target level for her/his profile, provide a progressive plan to increase frequency safely; if adequate, maintain or optimize intensity/duration."',
         '     },',
-        f'     "stress_management": "Include low-impact, mindfulness-integrated activities (e.g., yoga, tai chi) on high-stress days based on stress_level={stress_level}",',
-        '     "hypertension_precautions": "Low-impact cardio and resistance training with monitored intensity to manage blood pressure; avoid high-intensity intervals if uncontrolled",',
-        '     "progression": "Detailed 4-week progression plan to increase intensity or volume as tolerated",',
+        f'     "stress_management": " if value of stress is high only (stress={input_values.get("Stress_Level", "N/A")} out of 10)Include low-impact, mindfulness-integrated activities (e.g., yoga, tai chi) on high-stress days based on stress_level={stress_level}",',
+        f'     "hypertension_precautions": "Low-impact cardio and resistance training with monitored intensity to manage blood pressure; avoid high-intensity intervals if uncontrolled all is related to the patient blood pressure({input_values.get("Blood_Pressure", "N/A")})",',
+        '     "progression": "Detailed 4-week progression plan to increase intensity or volume as tolerated if needed",',
         '     "precautions": "Any special precautions based on health conditions and medication interactions"',
         "   }",
         "",
         "4. nutrition_targets:",
         "   {",
         f'     "target_BMI": "{target_bmi} by {date.today().replace(year=date.today().year + 1).strftime("%Y-%m-%d")}",',
-        '     "target_glucose": "mg/dL range based on diabetes risk",',
+        f'     "target_glucose": "mg/dL range based on diabetes risk ={risk_probs["Diabetes"]}, ",',
         '     "other": {',
         '       "blood_pressure": "Target based on current status",',
-        '       "cholesterol": "Target levels based on CVD risk"',
+        f'       "cholesterol": "Target levels based on CVD risk CVD={risk_probs["Heart Disease"]}""',
         '     }',
         "   }",
         "",
@@ -623,7 +687,7 @@ def risk_assessment(state: State) -> dict:
     return {'risk_probabilities': probs}
 
 def generate_recommendations(state: State) -> dict:
-    input_values = state['risk_probabilities']['Input Values']
+    input_values = state['patient_data']
     risk_probs = state['risk_probabilities']['Health Risk Probabilities']
     sent_for = state['sent_for']
     medications = state.get('current_medications', [])
