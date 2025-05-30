@@ -452,7 +452,7 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
     # Define strict specialty boundaries for medications
     if specialty_lower == "cardiology":
         specialty_meds = [m for m in available_meds 
-                         if any(s.lower() in ['cardiac', 'cardiovascular', 'hypertension'] 
+                         if any(s.lower() in ['cardiac', 'cardiovascular', 'hypertension']) 
                          for s in m.specialization.split(',')]
         prohibited_conditions = ['diabetes', 'endocrine']
     elif specialty_lower == "endocrinology":
