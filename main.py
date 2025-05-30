@@ -67,7 +67,8 @@ class Medication(BaseModel):
     frequency: Optional[str] = None
     type: str = "continue" 
     rationale: Optional[str] = None
-
+    duration: Optional[str] = None
+    
 class Medicine(BaseModel):
     name: str
     specialization: str
@@ -643,7 +644,7 @@ def generate_doctor_prompt(input_values: dict, risk_probs: dict, medications: Li
         '            "current_status": "new/current",', 
         '            "dosage": "specific dosage with units",',
         '            "frequency": "how often",',
-        '            "duration": "how long to take",',
+        '           "duration": "specific duration (e.g., 2 weeks, 1 month, 3 months, 6 months, 1 year or untill next meet depend on patient data)",',
         '            "rationale": "why this medication is recommended",',
         '            "source": "database/general",',
         '            "specialty_appropriate": true',
@@ -764,7 +765,8 @@ def generate_recommendations(state: State) -> dict:
                         medicationName=med_rec['name'],
                         dosage=med_rec.get('dosage', ''),
                         frequency=med_rec.get('frequency', ''),
-                        type='new'
+                        type='new',
+                        duration=med_rec.get('duration', '') 
                     )
                     if 'rationale' in med_rec:
                         new_med.rationale = med_rec['rationale']
@@ -805,7 +807,8 @@ def output_results(state: State) -> dict:
             'medicationName': m.medicationName,
             'dosage': m.dosage,
             'frequency': m.frequency,
-            'type': m.type 
+            'type': m.type ,
+            'duration': m.duration 
         } for m in state.get('current_medications', [])]
     }
     
